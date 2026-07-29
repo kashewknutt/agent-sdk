@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,27 @@ class RunEventLogger:
         self._path.touch(exist_ok=True)
         return self._path
 
+    def ensure_active(self, *, prefer_latest: bool = True) -> str:
+        """Attach to an existing run log, or create an ops session.
+
+        Standalone actions (Execute approved, Resume engage) call set_step
+        outside a research run. Without this, emit() is a no-op and the
+        Fleet live trail never shows engage progress.
+        """
+        if self._run_id and self._path:
+            return self._run_id
+        if prefer_latest:
+            files = sorted(self.runs_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+            if files:
+                rid = files[-1].stem
+                # Re-open for append; do not truncate the existing trail.
+                self._run_id = rid
+                self._path = files[-1]
+                return rid
+        rid = datetime.now().strftime("%Y%m%dT%H%M%S") + "-ops-" + uuid.uuid4().hex[:6]
+        self.start(rid)
+        return rid
+
     def emit(
         self,
         message: str,
@@ -39,7 +62,8 @@ class RunEventLogger:
         data: dict[str, Any] | None = None,
     ) -> RunEvent:
         if not self._run_id or not self._path:
-            raise RuntimeError("RunEventLogger.start() must be called first")
+            self.ensure_active()
+        assert self._run_id and self._path
         event = RunEvent(
             run_id=self._run_id,
             level=level,
